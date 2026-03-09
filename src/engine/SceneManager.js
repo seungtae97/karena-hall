@@ -8,9 +8,12 @@ import gsap from 'gsap';
 
 export class SceneManager {
     constructor(container) {
+        if (!container) throw new Error('Container is required for SceneManager');
         this.container = container;
-        this.width = container.clientWidth;
-        this.height = container.clientHeight;
+        this.width = container.clientWidth || 100;
+        this.height = container.clientHeight || 100;
+
+        console.log('[DEBUG] SceneManager constructor: w=', this.width, 'h=', this.height);
 
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color(0x0f172a);
@@ -67,8 +70,10 @@ export class SceneManager {
     }
 
     onPointerDown(event) {
-        this.mouse.x = (event.clientX / this.width) * 2 - 1;
-        this.mouse.y = -(event.clientY / this.height) * 2 + 1;
+        if (!this.container) return;
+        const rect = this.container.getBoundingClientRect();
+        this.mouse.x = ((event.clientX - rect.left) / this.width) * 2 - 1;
+        this.mouse.y = -((event.clientY - rect.top) / this.height) * 2 + 1;
 
         this.raycaster.setFromCamera(this.mouse, this.camera);
         const intersects = this.raycaster.intersectObjects(this.seatGroup.children);
@@ -102,22 +107,35 @@ export class SceneManager {
     }
 
     initPostProcessing() {
-        this.composer = new EffectComposer(this.renderer);
-        this.composer.addPass(new RenderPass(this.scene, this.camera));
+        try {
+            this.composer = new EffectComposer(this.renderer);
+            this.composer.addPass(new RenderPass(this.scene, this.camera));
 
-        const bloomPass = new UnrealBloomPass(
-            new THREE.Vector2(this.width, this.height),
-            0.4, 0.1, 0.85
-        );
-        this.composer.addPass(bloomPass);
+            const bloomPass = new UnrealBloomPass(
+                new THREE.Vector2(this.width || 100, this.height || 100),
+                0.4, 0.1, 0.85
+            );
+            this.composer.addPass(bloomPass);
+        } catch (err) {
+            console.warn('PostProcessing initialization failed:', err);
+        }
     }
 
     animate() {
+        if (!this.renderer) return;
         this.frameId = requestAnimationFrame(this.animate);
-        this.controls.update();
+        if (this.controls) this.controls.update();
         this.renderRequested = false;
-        this.composer.render();
-        this.labelRenderer.render(this.scene, this.camera);
+
+        if (this.composer) {
+            this.composer.render();
+        } else {
+            this.renderer.render(this.scene, this.camera);
+        }
+
+        if (this.labelRenderer) {
+            this.labelRenderer.render(this.scene, this.camera);
+        }
     }
 
     requestUpdate() {
@@ -127,66 +145,70 @@ export class SceneManager {
     }
 
     updateFloors(floors, params, calcCValues) {
+        if (!this.floorGroup) return;
+
         // Clear previous meshes
         while (this.floorGroup.children.length) {
             const child = this.floorGroup.children[0];
-            child.geometry.dispose();
-            if (child.material.dispose) child.material.dispose();
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) {
+                if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+                else child.material.dispose();
+            }
             this.floorGroup.remove(child);
         }
 
         floors.forEach((fl) => {
             const { rows } = calcCValues(fl, params);
-            if (rows.length === 0) return;
+            if (!rows || rows.length === 0) return;
 
             const innerR = fl.rStart;
-            const outerR = rows[rows.length - 1].R + rows[rows.length - 1].d;
+            const lastRow = rows[rows.length - 1];
+            const outerR = (lastRow.R || innerR + 1) + (lastRow.d || 0.95);
 
-            // Draw floor segments as RingGeometry
-            // Since it's a hall, we'll draw 180 deg (Math.PI)
+            if (isNaN(innerR) || isNaN(outerR)) return;
+
             const floorGeo = new THREE.RingGeometry(innerR, outerR, 64, 1, 0, Math.PI);
             const floorMat = new THREE.MeshStandardMaterial({
-                color: fl.colorHex,
+                color: fl.colorHex || '#ffffff',
                 side: THREE.DoubleSide,
                 transparent: true,
                 opacity: 0.25
             });
             const floorMesh = new THREE.Mesh(floorGeo, floorMat);
             floorMesh.rotation.x = -Math.PI / 2;
-            floorMesh.position.y = fl.hBase;
+            floorMesh.position.y = fl.hBase || 0;
             this.floorGroup.add(floorMesh);
 
-            // Draw front edge line
             const edgeGeo = new THREE.RingGeometry(innerR - 0.05, innerR + 0.05, 64, 1, 0, Math.PI);
-            const edgeMat = new THREE.MeshBasicMaterial({ color: fl.colorHex, side: THREE.DoubleSide });
+            const edgeMat = new THREE.MeshBasicMaterial({ color: fl.colorHex || '#ffffff', side: THREE.DoubleSide });
             const edgeLine = new THREE.Mesh(edgeGeo, edgeMat);
             edgeLine.rotation.x = -Math.PI / 2;
-            edgeLine.position.y = fl.hBase + 0.01;
+            edgeLine.position.y = (fl.hBase || 0) + 0.01;
             this.floorGroup.add(edgeLine);
         });
     }
 
     clearSightlines() {
+        if (!this.sightlineGroup) return;
         while (this.sightlineGroup.children.length) {
             const child = this.sightlineGroup.children[0];
             if (child.geometry) child.geometry.dispose();
-            if (child.material) child.material.dispose();
+            if (child.material) {
+                if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+                else child.material.dispose();
+            }
             this.sightlineGroup.remove(child);
         }
     }
 
     drawSightline(seatInfo, blocked, blockStr) {
+        if (!seatInfo || !seatInfo.pos) return;
         this.clearSightlines();
-        if (!seatInfo) return;
 
-        const p1 = new THREE.Vector3(0, 1.0, 0); // Stage Center
-        const p2 = new THREE.Vector3(0, seatInfo.D, -seatInfo.R); // Seat Eye Position (rotated to Z axis for simplicity or use actual 3D)
-
-        // Actually, let's use the actual 3D position from seatInfo
-        // In the original, seatInfo.pos was used.
         const start = new THREE.Vector3(0, 1.0, 0);
         const end = seatInfo.pos.clone();
-        end.y = seatInfo.D;
+        end.y = seatInfo.D || seatInfo.E || seatInfo.H + 1.1;
 
         const points = [start, end];
         const lineGeo = new THREE.BufferGeometry().setFromPoints(points);
@@ -199,7 +221,6 @@ export class SceneManager {
         const line = new THREE.Line(lineGeo, lineMat);
         this.sightlineGroup.add(line);
 
-        // Selection Marker
         const markerGeo = new THREE.SphereGeometry(0.12, 16, 16);
         const markerMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
         const marker = new THREE.Mesh(markerGeo, markerMat);
@@ -211,10 +232,14 @@ export class SceneManager {
     }
 
     updateSeats(floors, params, calcCValues, onSelect) {
+        if (!this.seatGroup) return;
         while (this.seatGroup.children.length) {
             const child = this.seatGroup.children[0];
-            child.geometry.dispose();
-            child.material.dispose();
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) {
+                if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+                else child.material.dispose();
+            }
             this.seatGroup.remove(child);
         }
 
@@ -222,39 +247,77 @@ export class SceneManager {
 
         floors.forEach((fl) => {
             const { rows } = calcCValues(fl, params);
-            if (rows.length === 0) return;
+            if (!rows || rows.length === 0) return;
 
-            // Simplified: Draw 100 seats per floor as a demo or use total capacity if performance allows
-            // For now, let's draw rows to match the profile
             const count = rows.length;
-            const instMesh = new THREE.InstancedMesh(seatGeo, new THREE.MeshStandardMaterial({ color: fl.colorHex }), count);
+            const instMesh = new THREE.InstancedMesh(seatGeo, new THREE.MeshStandardMaterial({ color: fl.colorHex || '#ffffff' }), count);
             instMesh.userData = { floorId: fl.id, onSelect };
 
             const matrix = new THREE.Matrix4();
             rows.forEach((r, idx) => {
-                matrix.setPosition(0, r.H, -r.R);
-                instMesh.setMatrix(idx, matrix);
+                matrix.setPosition(0, r.H || 0, -(r.R || 0));
+                instMesh.setMatrixAt(idx, matrix);
             });
+            instMesh.instanceMatrix.needsUpdate = true;
+            instMesh.computeBoundingSphere();
 
             this.seatGroup.add(instMesh);
         });
     }
 
     resize() {
-        this.width = this.container.clientWidth;
-        this.height = this.container.clientHeight;
+        if (!this.container || !this.renderer) return;
+        this.width = this.container.clientWidth || 100;
+        this.height = this.container.clientHeight || 100;
         this.camera.aspect = this.width / this.height;
         this.camera.updateProjectionMatrix();
         this.renderer.setSize(this.width, this.height);
-        this.composer.setSize(this.width, this.height);
-        this.labelRenderer.setSize(this.width, this.height);
+        if (this.composer) this.composer.setSize(this.width, this.height);
+        if (this.labelRenderer) this.labelRenderer.setSize(this.width, this.height);
     }
 
     dispose() {
-        cancelAnimationFrame(this.frameId);
-        this.renderer.dispose();
-        this.composer.dispose();
-        this.container.removeChild(this.renderer.domElement);
-        this.container.removeChild(this.labelRenderer.domElement);
+        console.log('[DEBUG] SceneManager Disposal...');
+        if (this.frameId) cancelAnimationFrame(this.frameId);
+
+        if (this.container) {
+            this.container.removeEventListener('pointerdown', this.onPointerDown);
+        }
+
+        if (this.renderer) {
+            this.renderer.dispose();
+            if (this.renderer.domElement && this.renderer.domElement.parentNode) {
+                this.renderer.domElement.parentNode.removeChild(this.renderer.domElement);
+            }
+            this.renderer = null;
+        }
+
+        if (this.composer) {
+            this.composer.dispose();
+            this.composer = null;
+        }
+
+        if (this.labelRenderer) {
+            if (this.labelRenderer.domElement && this.labelRenderer.domElement.parentNode) {
+                this.labelRenderer.domElement.parentNode.removeChild(this.labelRenderer.domElement);
+            }
+            this.labelRenderer = null;
+        }
+
+        const disposeGroup = (group) => {
+            if (!group) return;
+            group.traverse((obj) => {
+                if (obj.geometry) obj.geometry.dispose();
+                if (obj.material) {
+                    if (Array.isArray(obj.material)) obj.material.forEach(m => m.dispose());
+                    else obj.material.dispose();
+                }
+            });
+        };
+        disposeGroup(this.floorGroup);
+        disposeGroup(this.seatGroup);
+        disposeGroup(this.sightlineGroup);
+
+        this.container = null;
     }
 }

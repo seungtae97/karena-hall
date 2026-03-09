@@ -4,34 +4,44 @@ import { cn } from '../../logic/utils';
 import * as THREE from 'three';
 
 export default function ProfileView() {
-    const { floors, params, activeFloorId, selectedSeat } = useStore();
-    const activeFloor = floors.find(f => f.id === activeFloorId);
+    const floors = useStore(state => state.floors);
+    const params = useStore(state => state.params);
+    const activeFloorId = useStore(state => state.activeFloorId);
+    const selectedSeat = useStore(state => state.selectedSeat);
 
+    const activeFloor = floors.find(f => f.id === activeFloorId);
     if (!activeFloor) return null;
 
     const { rows } = calcCValues(activeFloor, params);
 
-    // SVG Scaling
-    const maxR = Math.max(...floors.map(f => {
-        const stats = calcCValues(f, params);
-        return stats.rows.length ? stats.rows[stats.rows.length - 1].R : 0;
-    }));
-    const maxH = Math.max(...floors.map(f => f.hBase)) + 10;
+    // SVG Scaling with safety guards
+    let maxRVal = 50;
+    try {
+        const rVals = floors.map(f => {
+            const stats = calcCValues(f, params);
+            return stats.rows.length ? stats.rows[stats.rows.length - 1].R : 50;
+        });
+        maxRVal = Math.max(...rVals, 50);
+    } catch (e) { }
+
+    let maxHVal = 10;
+    try {
+        maxHVal = Math.max(...floors.map(f => f.hBase || 0), 10) + 10;
+    } catch (e) { }
 
     const scale = 5;
     const padding = 40;
-    const width = (maxR + 10) * scale + padding * 2;
-    const height = (maxH + 5) * scale + padding * 2;
+    const width = (maxRVal + 10) * scale + padding * 2;
+    const height = (maxHVal + 5) * scale + padding * 2;
+
+    if (isNaN(width) || isNaN(height)) return null;
 
     return (
-        <div className="absolute bottom-6 left-6 right-72 h-48 glass-card rounded-2xl p-4 overflow-hidden group select-none transition-all hover:h-64">
+        <div className="absolute bottom-6 left-6 right-72 h-48 glass-card rounded-2xl p-4 overflow-hidden group select-none transition-all hover:h-64 z-20">
             <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
-                    <div className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
-                    <span className="text-[0.6rem] font-black text-slate-400 uppercase tracking-widest">Section Profile: {activeFloorId}</span>
-                </div>
-                <div className="flex gap-2">
-                    <button className="px-2 py-0.5 rounded bg-white/5 border border-white/10 text-[0.55rem] text-slate-500 font-bold hover:text-slate-300">ZOOM FIT</button>
+                    <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+                    <span className="text-[0.6rem] font-black text-slate-400 uppercase tracking-widest text-shadow-sm">Section Profile: {activeFloorId}</span>
                 </div>
             </div>
 
@@ -44,7 +54,6 @@ export default function ProfileView() {
 
                     {/* Stage */}
                     <rect x={padding} y={height - padding - 1 * scale} width={30 * scale} height={1 * scale} fill="rgba(59,130,246,0.2)" />
-                    <circle cx={padding} cy={height - padding - 1 * scale} r="2" fill="var(--accent)" />
 
                     {/* All Floors (Muted) */}
                     {floors.map(fl => {
@@ -68,7 +77,6 @@ export default function ProfileView() {
                         fill="none"
                         stroke={activeFloor.colorHex}
                         strokeWidth="3"
-                        className="drop-shadow-[0_0_8px_rgba(255,255,255,0.2)]"
                     />
 
                     {/* Seats */}
@@ -77,10 +85,14 @@ export default function ProfileView() {
                             key={idx}
                             cx={r.R * scale + padding}
                             cy={height - padding - r.H * scale}
-                            r={selectedSeat?.i === r.i ? "3" : "1.5"}
-                            fill={selectedSeat?.i === r.i ? "#fff" : "rgba(255,255,255,0.4)"}
+                            r={selectedSeat?.i === r.i && selectedSeat?.floor === activeFloorId ? "3" : "1.5"}
+                            fill={selectedSeat?.i === r.i && selectedSeat?.floor === activeFloorId ? "#fff" : "rgba(255,255,255,0.4)"}
                             className="cursor-pointer transition-all hover:r-4 hover:fill-white"
-                            onClick={() => useStore.getState().setSelectedSeat({ ...r, floor: activeFloorId, pos: new THREE.Vector3(0, r.H, -r.R) })}
+                            onClick={() => useStore.getState().setSelectedSeat({
+                                ...r,
+                                floor: activeFloorId,
+                                pos: new THREE.Vector3(0, r.H, -r.R)
+                            })}
                         />
                     ))}
                 </svg>

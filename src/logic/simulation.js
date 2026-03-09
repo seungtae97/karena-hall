@@ -74,7 +74,7 @@ export function checkInterferences(floors, params) {
     let interfSeats = 0;
     const { cPass } = params;
 
-    for (let i = 1; i < floors.length - 1; i++) {
+    for (let i = 0; i < floors.length - 1; i++) {
         const flLower = floors[i];
         const stats = calcCValues(flLower, params);
         if (stats.rows.length === 0) continue;
